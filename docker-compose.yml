@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: production_postgres
+    environment:
+      POSTGRES_DB: opensearch_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: production_secure_db_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  opensearch-node:
+    image: opensearchproject/opensearch:2.14.0
+    container_name: production_opensearch
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch-node
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m" # Constrain memory usage for Free Tier compliance
+      - DISABLE_SECURITY_PLUGIN=true # Disable SSL/Auth layer internally inside isolated Docker setup
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend-api:
+    build: ./backend
+    container_name: production_backend
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - DB_HOST=postgres-db
+      - DB_USER=postgres
+      - DB_PASSWORD=production_secure_db_password
+      - DB_NAME=opensearch_db
+      - OPENSEARCH_NODE=http://opensearch-node:9200
+      - JWT_SECRET=super_secret_production_signing_key
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      opensearch-node:
+        condition: service_healthy
+
+  frontend-client:
+    build: ./frontend
+    container_name: production_frontend
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://localhost:5000/api
+    depends_on:
+      - backend-api
+
+volumes:
+  pgdata:
+  osdata:
